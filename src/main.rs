@@ -15,12 +15,15 @@ Stretch Goals:
 -provide a -p to create missing directories
 -publish to crates.io
 -shill it on reddit
+-add integration tests
 */
 extern crate clap;
 extern crate tempfile;
 
 use clap::{Arg, App};
+use std::fs::File;
 use std::io::prelude::*;
+use std::io::BufReader;
 use std::process::Command;
 
 fn main() {
@@ -56,5 +59,11 @@ fn main() {
         .arg(tmpfile.path())
         .status()
         .expect("vi command failed to start");
+
+
+    let reader = BufReader::new(File::open(tmpfile.path()).unwrap());
+    for line in reader.lines() {
+        println!("{}", line.unwrap());
+    }
 
 }
