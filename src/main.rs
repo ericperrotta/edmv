@@ -21,10 +21,12 @@ extern crate clap;
 extern crate tempfile;
 
 use clap::{Arg, App};
+use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::process::Command;
+use std::io;
 
 fn main() {
     let matches = App::new(env!("CARGO_PKG_NAME"))
@@ -40,7 +42,7 @@ fn main() {
       .get_matches();
 
     // TODO: Can we get the raw arguments instead of strings here?
-    let old_filenames = matches.values_of("FILES").unwrap();
+    let old_filenames = matches.values_of("FILES").unwrap().collect::<Vec<&str>>();
 
     // TODO: refuse to run if files contains duplicate
 
@@ -51,7 +53,7 @@ fn main() {
         .tempfile()
         .unwrap();
 
-    for filename in old_filenames {
+    for filename in &old_filenames {
         writeln!(tmpfile, "{}", filename).unwrap();
     }
 
@@ -62,8 +64,14 @@ fn main() {
 
 
     let reader = BufReader::new(File::open(tmpfile.path()).unwrap());
-    for line in reader.lines() {
-        println!("{}", line.unwrap());
+    let new_filenames = reader.lines().collect::<Result<Vec<String>, io::Error>>().unwrap();
+
+    if new_filenames.len() != old_filenames.len() {
+        panic!("The number of edited file names does not equal the number of old file names.");
     }
 
+    for (old_file, new_file) in old_filenames.iter().zip(new_filenames) {
+        fs::rename(old_file, new_file).unwrap();
+
+    }
 }
