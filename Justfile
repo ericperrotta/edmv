@@ -1,4 +1,7 @@
-default:
+check:
+  cargo check
+
+run:
   rm -rf tmp
   mkdir tmp
   touch tmp/{foo,bar,baz}
