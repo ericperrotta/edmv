@@ -1,14 +1,4 @@
 /*
--clap library for parsing command line arguments
--take some command line arguments
--write temporary file
--open the temporary file with the editor
--read the new names out of the temp file
--rename file command
--using temp file to remove temporary file
--use EDITOR variable to decide which editor to invoke
--allow EDMV_EDITOR to override EDITOR
--include tempfile path with tempfile errors
 -check that all files exist before putting them in in the editor
 -check that destination does not already exist unless -f is passed
 - allow -- to signal end of flags
@@ -38,44 +28,47 @@ use std::io;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
+use std::env;
+use std::ffi::OsString;
+use std::path::Path;
+use std::path::PathBuf;
 
 enum Error {
-    TempfileCreation{io_error: io::Error},
-    TempfileWrite{io_error: io::Error},
-    TempfileOpen{io_error: io::Error},
-    TempfileRead{io_error: io::Error},
-    EditorInvocation{io_error: io::Error, editor_command: String},
+    TempfileCreation{io_error: io::Error, dir_path: PathBuf},
+    TempfileWrite{io_error: io::Error, path: PathBuf},
+    TempfileOpen{io_error: io::Error, path: PathBuf},
+    TempfileRead{io_error: io::Error, path: PathBuf},
+    // MissingFiles{paths: Vec<PathBuf>},
+    EditorInvocation{io_error: io::Error, editor_command: OsString},
     EditorStatus{status: Option<i32>},
     LineCount{file_count: usize, line_count: usize},
-    Rename{io_error: io::Error, old_name: String, new_name: String},
-    RawIo{io_error: io::Error}
-}
-
-impl From<io::Error> for Error {
-    fn from(io_error: io::Error) -> Error {
-        Error::RawIo{io_error}
-    }
+    Rename{io_error: io::Error, from: String, to: String},
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         use Error::*;
         match *self {
-            TempfileCreation{ref io_error} => write!(f, "Error creating tempfile: {}", io_error),
-            TempfileWrite{ref io_error} => write!(f, "Error writing to tempfile: {}", io_error),
-            TempfileOpen{ref io_error} => write!(f, "Error opening tempfile: {}", io_error),
-            TempfileRead{ref io_error} => write!(f, "Error reading tempfile: {}", io_error),
+            TempfileCreation{ref io_error, ref dir_path} =>
+                write!(f, "Error creating tempfile in `{}`: {}", dir_path.display(), io_error),
+            TempfileWrite{ref io_error, ref path} =>
+                write!(f, "Error writing to tempfile `{}`: {}", path.display(), io_error),
+            TempfileOpen{ref io_error, ref path} =>
+                write!(f, "Error opening tempfile `{}`: {}", path.display(), io_error),
+            TempfileRead{ref io_error, ref path} =>
+                write!(f, "Error reading tempfile `{}`: {}", path.display(), io_error),
+            // MissingFiles{ref paths} => write!(f, "Path(s) do not exist: {}", pa)
             EditorInvocation{ref io_error, ref editor_command} =>
-                write!(f, "Error invoking editor `{}`: {}", editor_command, io_error),
+                write!(f, "Error invoking editor `{}`: {}",
+                       editor_command.to_string_lossy(), io_error),
             EditorStatus{status: Some(status)} =>
                 write!(f, "Editor failed with status code: {}", status),
             EditorStatus{status: None} =>
                 write!(f, "Editor failed with unknown status"),
             LineCount{file_count, line_count} =>
                 write!(f, "Renaming {} files but found {} lines", file_count, line_count),
-            Rename{ref io_error, ref old_name, ref new_name} =>
-                write!(f, "Error renaming file `{}` -> `{}`: {}", old_name, new_name, io_error),
-            RawIo{ref io_error} => write!(f, "Raw IO Error: {}", io_error)
+            Rename{ref io_error, ref from, ref to} =>
+                write!(f, "Error renaming file `{}` -> `{}`: {}", from, to, io_error),
         }
     }
 }
@@ -95,6 +88,10 @@ fn run() -> Result<(), Error> {
 
     // TODO: Can we get the raw arguments instead of strings here?
     let old_filenames = matches.values_of("FILES").unwrap().collect::<Vec<&str>>();
+    for file in &old_filenames {
+        let _path = Path::new(file);
+
+    }
 
     // TODO: refuse to run if files contains duplicate
 
@@ -103,32 +100,35 @@ fn run() -> Result<(), Error> {
         .prefix("edmv")
         .suffix(".txt")
         .tempfile()
-        .map_err(|io_error| Error::TempfileCreation{io_error})?;
+        .map_err(|io_error| Error::TempfileCreation{dir_path: env::temp_dir(), io_error})?;
 
     for filename in &old_filenames {
         writeln!(tmpfile, "{}", filename)
-            .map_err(|io_error| Error::TempfileWrite{io_error})?;
+            .map_err(|io_error| Error::TempfileWrite{io_error, path: tmpfile.path().to_path_buf()})?;
     }
 
-    let editor_command = "vi";
-    let exit_status = Command::new("vi")
+    let editor_command = env::var_os("EDMV_EDITOR")
+        .or_else(|| env::var_os("EDITOR"))
+        .unwrap_or_else(|| OsString::from("vi"));
+
+    let exit_status = Command::new(&editor_command)
         .arg(tmpfile.path())
         .status()
         .map_err(|io_error| Error::EditorInvocation {
             io_error,
-            editor_command: editor_command.to_string()
+            editor_command,
         })?;
 
     if !exit_status.success() {
         return Err(Error::EditorStatus{status: exit_status.code()});
     }
 
-    let file = File::open(tmpfile.path())
-        .map_err(|io_error| Error::TempfileOpen{io_error})?;
+    let file = File::open(&tmpfile)
+        .map_err(|io_error| Error::TempfileOpen{io_error, path: tmpfile.path().to_path_buf()})?;
 
     let reader = BufReader::new(file);
     let new_filenames = reader.lines().collect::<Result<Vec<String>, io::Error>>()
-        .map_err(|io_error| Error::TempfileRead{io_error})?;
+        .map_err(|io_error| Error::TempfileRead{io_error, path: tmpfile.path().to_path_buf()})?;
 
     if new_filenames.len() != old_filenames.len() {
         return Err(Error::LineCount {
@@ -137,9 +137,9 @@ fn run() -> Result<(), Error> {
         });
     }
 
-    for (old_file, new_file) in old_filenames.iter().zip(new_filenames) {
-        fs::rename(old_file, new_file)
-            .map_err(|)?;
+    for (from, to) in old_filenames.iter().zip(new_filenames) {
+        fs::rename(from, &to)
+            .map_err(|io_error| Error::Rename{io_error, from: from.to_string(), to})?;
     }
 
     Ok(())
