@@ -1,7 +1,4 @@
 /*
--check that all files exist before putting them in in the editor
--check that destination does not already exist unless -f is passed
-- allow -- to signal end of flags
 
 Stretch Goals:
 -check for duplicates on the input and output
@@ -13,6 +10,9 @@ Stretch Goals:
 -shill it on reddit
 -add integration tests
 -remove files where user makes line blank in tempfile
+-support files on different mount points
+- move files back if we got an error midway
+- allow -- to signal end of flags
 */
 extern crate clap;
 extern crate tempfile;
@@ -38,7 +38,8 @@ enum Error {
     TempfileWrite{io_error: io::Error, path: PathBuf},
     TempfileOpen{io_error: io::Error, path: PathBuf},
     TempfileRead{io_error: io::Error, path: PathBuf},
-    // MissingFiles{paths: Vec<PathBuf>},
+    BadSources{errors: Vec<(PathBuf, io::Error)>},
+    BadDestinations{errors: Vec<(PathBuf, Option<io::Error>)>},
     EditorInvocation{io_error: io::Error, editor_command: OsString},
     EditorStatus{status: Option<i32>},
     LineCount{file_count: usize, line_count: usize},
@@ -57,7 +58,23 @@ impl Display for Error {
                 write!(f, "Error opening tempfile `{}`: {}", path.display(), io_error),
             TempfileRead{ref io_error, ref path} =>
                 write!(f, "Error reading tempfile `{}`: {}", path.display(), io_error),
-            // MissingFiles{ref paths} => write!(f, "Path(s) do not exist: {}", pa)
+            BadSources{ref errors} => {
+                writeln!(f, "Error accessing source files:")?;
+                for (path, error) in errors {
+                    writeln!(f, "{}: {}", path.display(), error)?;
+                }
+                Ok(())
+            }
+            BadDestinations{ref errors} => {
+                writeln!(f, "Error with destinations:")?;
+                for (path, error) in errors {
+                    match error {
+                        Some(error) => writeln!(f, "{}: {}", path.display(), error)?,
+                        None => writeln!(f, "{}: already exists", path.display())?,
+                    }
+                }
+                Ok(())
+            }
             EditorInvocation{ref io_error, ref editor_command} =>
                 write!(f, "Error invoking editor `{}`: {}",
                        editor_command.to_string_lossy(), io_error),
@@ -88,9 +105,15 @@ fn run() -> Result<(), Error> {
 
     // TODO: Can we get the raw arguments instead of strings here?
     let old_filenames = matches.values_of("FILES").unwrap().collect::<Vec<&str>>();
+    let mut errors = Vec::new();
     for file in &old_filenames {
-        let _path = Path::new(file);
-
+        let path = Path::new(file);
+        if let Err(err) = path.symlink_metadata() {
+            errors.push((path.to_path_buf(), err));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(Error::BadSources{errors});
     }
 
     // TODO: refuse to run if files contains duplicate
@@ -135,6 +158,22 @@ fn run() -> Result<(), Error> {
             file_count: old_filenames.len(),
             line_count: new_filenames.len()
         });
+    }
+
+    let mut errors = Vec::new();
+    for destination in &new_filenames {
+        let path = Path::new(destination);
+        if let Err(err) = path.symlink_metadata() {
+            if err.kind() == io::ErrorKind::NotFound {
+                continue;
+            }
+            errors.push((path.to_path_buf(), Some(err)));
+        } else {
+            errors.push((path.to_path_buf(), None));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(Error::BadDestinations{errors});
     }
 
     for (from, to) in old_filenames.iter().zip(new_filenames) {
