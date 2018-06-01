@@ -8,3 +8,6 @@ description = "A tool for bulk-renaming files using the editor of your choice"
 [dependencies]
 clap = "2.31.2"
 tempfile = "3.0.1"
+
+[dev-dependencies]
+executable-path = "1.0.0"

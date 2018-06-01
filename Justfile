@@ -1,3 +1,5 @@
+default: test
+
 check:
   cargo check
 
@@ -7,3 +9,6 @@ run:
   touch tmp/{foo,bar,baz}
   cargo run tmp/*
   ls tmp
+
+test:
+  cargo test

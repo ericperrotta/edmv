@@ -13,6 +13,7 @@ Stretch Goals:
 -support files on different mount points
 - move files back if we got an error midway
 - allow -- to signal end of flags
+- refuse to run if files contain newline characters
 */
 extern crate clap;
 extern crate tempfile;
@@ -160,9 +161,19 @@ fn run() -> Result<(), Error> {
         });
     }
 
+    let changed_files = old_filenames.into_iter()
+        .zip(new_filenames)
+        .filter(|(from, to)| from != to)
+        .collect::<Vec<(&str, String)>>();
+
+    if changed_files.is_empty() {
+        eprintln!("Nothing to do.");
+        return Ok(());
+    }
+
     let mut errors = Vec::new();
-    for destination in &new_filenames {
-        let path = Path::new(destination);
+    for (_, to) in &changed_files {
+        let path = Path::new(to);
         if let Err(err) = path.symlink_metadata() {
             if err.kind() == io::ErrorKind::NotFound {
                 continue;
@@ -176,7 +187,7 @@ fn run() -> Result<(), Error> {
         return Err(Error::BadDestinations{errors});
     }
 
-    for (from, to) in old_filenames.iter().zip(new_filenames) {
+    for (from, to) in changed_files {
         fs::rename(from, &to)
             .map_err(|io_error| Error::Rename{io_error, from: from.to_string(), to})?;
     }
