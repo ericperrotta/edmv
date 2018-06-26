@@ -1,8 +1,21 @@
 use std::io::prelude::*;
 
 use super::*;
+
 pub fn run(config: Config) -> Result<(), Error>
 {
+    let mut errors = Vec::new();
+    for source in &config.paths {
+        let path = Path::new(source);
+        if let Err(err) = path.symlink_metadata() {
+            errors.push((path.to_path_buf(), err));
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(Error::BadSources{errors});
+    }
+
     let mut tmpfile = tempfile::Builder::new()
         .prefix("edmv")
         .suffix(".txt")
@@ -77,6 +90,27 @@ pub fn run(config: Config) -> Result<(), Error>
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn bad_sources() {
+        let config = Config {
+            paths: vec!["/foo/bar/hungry/tacos.txt".to_string()],
+            editor: OsString::from("vi"),
+        };
+
+        match run(config).unwrap_err() {
+            Error::BadSources{errors} => {
+                assert_eq!(errors.len(), 1);
+                assert_eq!(errors[0].0, Path::new("/foo/bar/hungry/tacos.txt"));
+                assert_eq!(errors[0].1.kind(), io::ErrorKind::NotFound);
+            }
+            other => panic!("Unexpected error: {:?}", other),
+        }
+
+        // BadSources{errors: Vec<(PathBuf, io::Error)>},
+
+    }
+
     #[test]
     fn editor_invocation() {
         let tmpfile = tempfile::Builder::new()
